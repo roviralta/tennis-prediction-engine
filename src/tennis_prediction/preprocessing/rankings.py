@@ -96,7 +96,7 @@ def add_match_rankings(
     matches: pl.DataFrame,
     rankings: pl.DataFrame,
 ) -> pl.DataFrame:
-    """Add pre-match rankings for both players."""
+    """Add pre-match rankings and relative ranking features."""
 
     result = add_player_ranking(
         matches,
@@ -112,7 +112,7 @@ def add_match_rankings(
         prefix="player_b",
     )
 
-    return result
+    return add_ranking_differences(result)
 
 
 def add_ranking_differences(

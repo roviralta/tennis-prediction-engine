@@ -144,6 +144,21 @@ def test_real_matches_have_rankings() -> None:
     )
 
     assert enriched.height == 5888
+    
+    assert "rank_difference" in enriched.columns
+    assert "rank_points_difference" in enriched.columns
+
+    assert (
+        enriched["rank_difference"].null_count()
+        == enriched["player_a_rank"].null_count()
+    + enriched["player_b_rank"].null_count()
+    - enriched.select(
+        (
+            pl.col("player_a_rank").is_null()
+            & pl.col("player_b_rank").is_null()
+        ).sum()
+    ).item()
+)
 
 
 def test_add_ranking_differences() -> None:
