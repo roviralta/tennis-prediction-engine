@@ -2,6 +2,7 @@ import polars as pl
 
 from tennis_prediction.features.form import calculate_recent_form
 from tennis_prediction.features.form import add_recent_form_features
+from tennis_prediction.features.form import add_surface_recent_form_features
 
 
 def test_calculate_recent_win_rate() -> None:
@@ -254,3 +255,58 @@ def test_window_cut_with_same_date_matches_uses_stable_source_order() -> None:
     # Source order is only a deterministic tie-break; it does not imply
     # that the archive provides exact ordering within the tournament date.
     assert result["player_a_win_rate_last_1"].to_list() == [1.0]
+
+
+def test_surface_recent_form_uses_only_prior_matches_on_target_surface() -> None:
+    history = pl.DataFrame(
+        {
+            "tourney_date": [20250101, 20250102, 20250103, 20250104, 20250105],
+            "winner_id": [1, 2, 1, 2, 1],
+            "loser_id": [2, 1, 3, 1, 2],
+            "surface": ["Hard", "Hard", "Clay", "Hard", "Hard"],
+        }
+    )
+    matches = pl.DataFrame(
+        {
+            "player_a": [1],
+            "player_b": [2],
+            "tourney_date": [20250104],
+            "surface": ["Hard"],
+        }
+    )
+
+    result = add_surface_recent_form_features(matches, history, window=10)
+
+    assert result["player_a_surface_win_rate_last_10"].to_list() == [0.5]
+    assert result["player_b_surface_win_rate_last_10"].to_list() == [0.5]
+    assert result["surface_win_rate_difference_last_10"].to_list() == [0.0]
+
+
+def test_surface_recent_form_preserves_null_for_unknown_surface_or_no_history() -> None:
+    history = pl.DataFrame(
+        {
+            "tourney_date": [20250101],
+            "winner_id": [1],
+            "loser_id": [2],
+            "surface": ["Clay"],
+        }
+    )
+    matches = pl.DataFrame(
+        {
+            "player_a": [1, 3],
+            "player_b": [2, 4],
+            "tourney_date": [20250102, 20250102],
+            "surface": [None, "Hard"],
+        },
+        schema={
+            "player_a": pl.Int64,
+            "player_b": pl.Int64,
+            "tourney_date": pl.Int64,
+            "surface": pl.String,
+        },
+    )
+
+    result = add_surface_recent_form_features(matches, history)
+
+    assert result["player_a_surface_win_rate_last_10"].to_list() == [None, None]
+    assert result["player_b_surface_win_rate_last_10"].to_list() == [None, None]

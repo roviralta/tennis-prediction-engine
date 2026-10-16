@@ -29,7 +29,7 @@ data/processed/*
 data/external/*
 
 # ML artifacts
-models/
+/models/
 artifacts/
 mlruns/
 
