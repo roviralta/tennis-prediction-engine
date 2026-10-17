@@ -23,6 +23,7 @@ class WinnerModelArtifact:
     imputer: TrainingFeatureImputer
     encoder: TrainingFeatureEncoder
     feature_columns: tuple[str, ...]
+    training_cutoff_date: int | None = None
     format_version: int = ARTIFACT_FORMAT_VERSION
 
 
@@ -32,11 +33,14 @@ def create_winner_model_artifact(result: BaselineResult) -> WinnerModelArtifact:
     feature_columns = result.imputed.imputer.feature_columns
     if feature_columns is None:
         raise ValueError("The result does not contain a fitted feature imputer")
+    training_dates = result.imputed.splits.train.metadata["tourney_date"].drop_nulls()
+    training_cutoff_date = training_dates.max() if len(training_dates) else None
     return WinnerModelArtifact(
         model=result.model,
         imputer=result.imputed.imputer,
         encoder=result.encoded.encoder,
         feature_columns=tuple(feature_columns),
+        training_cutoff_date=training_cutoff_date,
     )
 
 

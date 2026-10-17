@@ -31,7 +31,7 @@ RANKING_FEATURE_COLUMNS = (
 
 @dataclass(frozen=True)
 class BaselineResult:
-    """Fitted logistic baseline and held-out metrics for reproducible review."""
+    """Fitted winner model, preprocessing state, and optional held-out metrics."""
 
     model: BaseEstimator
     imputed: ImputedPredictionSplits
@@ -123,8 +123,6 @@ def _train_baseline_with_estimator(
         )
         if should_evaluate
     )
-    if not evaluation_splits:
-        raise ValueError("At least one evaluation split must be selected")
     for split_name in evaluation_splits:
         split = getattr(encoded.splits, split_name)
         target = split.target.to_numpy().astype(np.uint8)
@@ -137,7 +135,19 @@ def _train_baseline_with_estimator(
         model=model,
         imputed=imputed,
         encoded=encoded,
-        metrics=pl.DataFrame(metric_rows),
+        metrics=(
+            pl.DataFrame(metric_rows)
+            if metric_rows
+            else pl.DataFrame(
+                schema={
+                    "split": pl.String,
+                    "rows": pl.Int64,
+                    "accuracy": pl.Float64,
+                    "log_loss": pl.Float64,
+                    "brier_score": pl.Float64,
+                }
+            )
+        ),
     )
 
 
@@ -233,6 +243,45 @@ def refit_hist_gradient_boosting_on_train_and_validation(
         _hist_gradient_boosting_estimator(),
         evaluate_validation=False,
         evaluate_test=True,
+    )
+
+
+def fit_production_hist_gradient_boosting(
+    table: PredictionTable,
+) -> BaselineResult:
+    """Fit the frozen winner model on all dated, labeled rows without evaluation.
+
+    This fit is intended for inference only. It excludes undated rows, learns
+    imputation and category levels from the complete fitting set, and returns no
+    performance metrics because every included row was used for training.
+    Chronological evaluation must be reported from the separate frozen splits.
+    """
+
+    dated = table.metadata["tourney_date"].is_not_null()
+    training_table = PredictionTable(
+        metadata=table.metadata.filter(dated),
+        features=table.features.filter(dated),
+        target=table.target.filter(dated),
+    )
+    if training_table.metadata.height == 0:
+        raise ValueError("Production fit requires at least one dated labeled match")
+
+    empty_table = PredictionTable(
+        metadata=training_table.metadata.head(0),
+        features=training_table.features.head(0),
+        target=training_table.target.head(0),
+    )
+    fit_splits = PredictionSplits(
+        train=training_table,
+        validation=empty_table,
+        test=empty_table,
+        undated=empty_table,
+    )
+    return _train_baseline_with_estimator(
+        fit_splits,
+        _hist_gradient_boosting_estimator(),
+        evaluate_validation=False,
+        evaluate_test=False,
     )
 
 

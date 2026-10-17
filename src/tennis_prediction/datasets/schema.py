@@ -15,6 +15,19 @@ FORBIDDEN_FEATURE_COLUMNS = {
     "loser_id",
     "score",
     "minutes",
+    "match_duration",
+    "winner_sets",
+    "loser_sets",
+    "winner_games",
+    "loser_games",
+    "total_games",
+    "correct_set_score",
+    "set_score",
+    "player_games",
+    "games_handicap",
+    "sets_handicap",
+    "score_status",
+    "score_has_match_tiebreak",
 }
 
 
@@ -108,7 +121,7 @@ def build_prediction_table(
         sorted(
             column
             for column in selected_features
-            if column.startswith(("w_", "l_"))
+            if column.startswith(("w_", "l_", "winner_", "loser_"))
         )
     )
     if forbidden:

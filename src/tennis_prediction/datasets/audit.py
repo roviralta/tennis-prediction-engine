@@ -57,7 +57,11 @@ def _validate_feature_definitions(
 
     forbidden = sorted(set(feature_columns) & FORBIDDEN_FEATURE_COLUMNS)
     forbidden.extend(
-        sorted(column for column in feature_columns if column.startswith(("w_", "l_")))
+        sorted(
+            column
+            for column in feature_columns
+            if column.startswith(("w_", "l_", "winner_", "loser_"))
+        )
     )
     if forbidden:
         raise ValueError(
