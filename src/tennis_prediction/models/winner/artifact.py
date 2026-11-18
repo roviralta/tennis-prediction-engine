@@ -52,6 +52,14 @@ def save_winner_model_artifact(
 ) -> Path:
     """Save a model artifact atomically; refuse to replace files by default."""
 
+    return save_model_artifact(artifact, path, overwrite=overwrite)
+
+
+def save_model_artifact(
+    artifact: object, path: str | Path, *, overwrite: bool = False
+) -> Path:
+    """Persist a trusted local model artifact using an atomic file operation."""
+
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and not overwrite:

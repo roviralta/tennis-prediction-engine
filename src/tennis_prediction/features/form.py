@@ -1,5 +1,6 @@
 from bisect import bisect_left
 from collections import defaultdict
+from itertools import accumulate
 
 import polars as pl
 
@@ -11,87 +12,56 @@ def _missing_columns(frame: pl.DataFrame, required_columns: list[str]) -> list[s
     return [column for column in required_columns if column not in frame.columns]
 
 
-def _build_player_history(
+def _build_history_index(
     history: pl.DataFrame,
-) -> dict[int, tuple[list[int], list[int]]]:
-    """Build date-sorted match dates and win-count prefixes for each player."""
+    *,
+    by_surface: bool = False,
+) -> dict[int | tuple[int, str], tuple[list[int], list[int]]]:
+    """Build sorted dates and win-count prefixes for each history key."""
 
-    player_matches: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+    columns = HISTORY_COLUMNS + ["surface"] if by_surface else HISTORY_COLUMNS
+    ordered = history.select(columns).drop_nulls(
+        ["tourney_date", "surface"] if by_surface else ["tourney_date"]
+    )
+    # Reverse the source order before a stable date sort. Scanning a window
+    # backwards then prefers the first source row among tied dates.
+    ordered = ordered.reverse().sort("tourney_date", maintain_order=True)
+    dates_by_key: dict[int | tuple[int, str], list[int]] = defaultdict(list)
+    outcomes_by_key: dict[int | tuple[int, str], list[int]] = defaultdict(list)
 
-    for source_order, (match_date, winner_id, loser_id) in enumerate(
-        history.select(HISTORY_COLUMNS).iter_rows()
-    ):
-        if match_date is None:
-            continue
+    for match_date, winner_id, loser_id, *context in ordered.iter_rows():
         if winner_id is not None:
-            player_matches[winner_id].append((match_date, source_order, 1))
+            winner_key = (winner_id, context[0]) if by_surface else winner_id
+            dates_by_key[winner_key].append(match_date)
+            outcomes_by_key[winner_key].append(1)
         if loser_id is not None and loser_id != winner_id:
-            player_matches[loser_id].append((match_date, source_order, 0))
-
-    indexed_history = {}
-    for player_id, matches in player_matches.items():
-        # The archive has no match timestamps. Reverse source order within each
-        # date so a window cut is deterministic and matches stable descending
-        # date sorting; this tie-break does not claim within-date chronology.
-        matches.sort(key=lambda item: (item[0], -item[1]))
-        dates = [match_date for match_date, _, _ in matches]
-        win_prefix = [0]
-        for _, _, won in matches:
-            win_prefix.append(win_prefix[-1] + won)
-        indexed_history[player_id] = (dates, win_prefix)
-
-    return indexed_history
-
-
-def _build_player_surface_history(
-    history: pl.DataFrame,
-) -> dict[tuple[int, str], tuple[list[int], list[int]]]:
-    """Build date-sorted histories for each player and known surface."""
-
-    player_matches: dict[tuple[int, str], list[tuple[int, int, int]]] = defaultdict(list)
-
-    for source_order, (match_date, winner_id, loser_id, surface) in enumerate(
-        history.select(HISTORY_COLUMNS + ["surface"]).iter_rows()
-    ):
-        if match_date is None or surface is None:
-            continue
-        if winner_id is not None:
-            player_matches[(winner_id, surface)].append((match_date, source_order, 1))
-        if loser_id is not None and loser_id != winner_id:
-            player_matches[(loser_id, surface)].append((match_date, source_order, 0))
-
-    indexed_history = {}
-    for player_surface, matches in player_matches.items():
-        matches.sort(key=lambda item: (item[0], -item[1]))
-        dates = [match_date for match_date, _, _ in matches]
-        win_prefix = [0]
-        for _, _, won in matches:
-            win_prefix.append(win_prefix[-1] + won)
-        indexed_history[player_surface] = (dates, win_prefix)
-
-    return indexed_history
-
-
-def _recent_form_from_index(
-    player_history: dict[object, tuple[list[int], list[int]]],
-    player_id: object,
-    match_date: int,
-    window: int,
-) -> dict[str, int | float | None]:
-    if match_date is None:
-        return {"matches_played": 0, "wins": 0, "win_rate": None}
-
-    dates, win_prefix = player_history.get(player_id, ([], [0]))
-    end = bisect_left(dates, match_date)
-    start = max(0, end - window)
-    matches_played = end - start
-    wins = win_prefix[end] - win_prefix[start]
+            loser_key = (loser_id, context[0]) if by_surface else loser_id
+            dates_by_key[loser_key].append(match_date)
+            outcomes_by_key[loser_key].append(0)
 
     return {
-        "matches_played": matches_played,
-        "wins": wins,
-        "win_rate": wins / matches_played if matches_played else None,
+        key: (dates, list(accumulate(outcomes_by_key[key], initial=0)))
+        for key, dates in dates_by_key.items()
     }
+
+
+def _win_rate_from_index(
+    player_history: dict[int | tuple[int, str], tuple[list[int], list[int]]],
+    key: int | tuple[int, str] | None,
+    match_date: int | None,
+    window: int,
+) -> float | None:
+    entry = player_history.get(key) if key is not None else None
+    if match_date is None or entry is None:
+        return None
+
+    dates, win_prefix = entry
+    end = bisect_left(dates, match_date)
+    if end == 0:
+        return None
+
+    start = max(0, end - window)
+    return (win_prefix[end] - win_prefix[start]) / (end - start)
 
 
 def calculate_recent_form(
@@ -160,7 +130,7 @@ def add_recent_form_features(
     if missing_history_columns:
         raise ValueError(f"Missing required columns: {missing_history_columns}")
 
-    player_history = _build_player_history(history)
+    player_history = _build_history_index(history)
     form_cache: dict[tuple[int | None, int | None], float | None] = {}
     player_a_rates: list[float | None] = []
     player_b_rates: list[float | None] = []
@@ -172,9 +142,9 @@ def add_recent_form_features(
         ):
             key = (player_id, match_date)
             if key not in form_cache:
-                form_cache[key] = _recent_form_from_index(
+                form_cache[key] = _win_rate_from_index(
                     player_history, player_id, match_date, window
-                )["win_rate"]
+                )
             rates.append(form_cache[key])
 
     suffix = f"last_{window}"
@@ -217,7 +187,7 @@ def add_surface_recent_form_features(
     if missing_history_columns:
         raise ValueError(f"Missing required columns: {missing_history_columns}")
 
-    player_surface_history = _build_player_surface_history(history)
+    player_surface_history = _build_history_index(history, by_surface=True)
     form_cache: dict[tuple[int | None, str | None, int | None], float | None] = {}
     player_a_rates: list[float | None] = []
     player_b_rates: list[float | None] = []
@@ -231,12 +201,12 @@ def add_surface_recent_form_features(
                 if surface is None or match_date is None:
                     rate = None
                 else:
-                    rate = _recent_form_from_index(
+                    rate = _win_rate_from_index(
                         player_surface_history,
                         (player_id, surface),
                         match_date,
                         window,
-                    )["win_rate"]
+                    )
                 form_cache[key] = rate
             rates.append(form_cache[key])
 

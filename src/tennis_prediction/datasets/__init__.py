@@ -19,6 +19,7 @@ from tennis_prediction.datasets.market_targets import MarketTargetAudit
 from tennis_prediction.datasets.market_targets import MarketTargetSplits
 from tennis_prediction.datasets.market_targets import audit_market_targets
 from tennis_prediction.datasets.market_targets import build_market_target_table
+from tennis_prediction.datasets.market_targets import market_target_eligibility
 from tennis_prediction.datasets.market_targets import split_market_target_table
 from tennis_prediction.datasets.schema import PredictionTable
 from tennis_prediction.datasets.schema import PredictionSplits
@@ -50,6 +51,7 @@ __all__ = [
     "encode_prediction_splits",
     "feature_definitions_for",
     "impute_prediction_splits",
+    "market_target_eligibility",
     "split_prediction_table",
     "split_market_target_table",
 ]

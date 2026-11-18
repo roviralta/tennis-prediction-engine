@@ -18,8 +18,8 @@ The system aims to:
 
 ## Project Status
 
-🚧 Early development — historical winner modeling, production training, and future-match
-winner probabilities are available through the CLI. Statistical market models are next.
+The CLI supports match winner probabilities, final set score probabilities, and
+under/push/over probabilities for total-games lines.
 
 ## Technology
 
@@ -93,3 +93,41 @@ and displays target range and consistency checks. Only completed, structurally v
 set and game targets. Retirements and ambiguous scores remain visible in the status counts but do
 not become ordinary completed-match outcomes. Matches decided by a bracketed match tiebreak retain
 set targets while game totals remain missing.
+
+## Final set score and total games
+
+Fit the fixed local models and save the artifact:
+
+```bash
+uv run tennis train-score
+```
+
+The default artifact path is `models/score.joblib`. Use `--artifact-path PATH` to
+choose a path and `--overwrite` when replacing an existing artifact. The models use
+eligible results through 2018 and the selected adjustments fitted on 2019. Pre-match
+form and rankings at prediction time come from the supplied local archive. Use the
+same archive for training and prediction.
+
+```bash
+uv run tennis predict-score \
+  --player-a "Carlos Alcaraz" --player-b "Jannik Sinner" \
+  --date 20261201 --best-of 3 --surface Hard \
+  --line 21.5 --line 22 --line 22.5
+```
+
+The score shown lists the first requested player's sets first. You can omit
+`--line` to see the default lines for the match format or repeat it to select
+custom integer and half-integer lines. An integer line includes a push probability
+for an exact match. When known, `--round`, `--draw-size`, and `--tourney-level`
+supply tournament context. Unspecified context uses the fitted missing-value handling.
+
+Games forecasts apply to standard completed matches. Set-score forecasts use eligible
+completed match scores, including records with a match tiebreak. Dates must be later
+than 2019-12-31, the fitting and calibration cutoff. The archive coverage can limit
+the recency of the pre-match features.
+
+To reproduce the fixed comparison on reserved score-market outcomes from 2022 onward:
+
+```bash
+uv run tennis validate-score
+```

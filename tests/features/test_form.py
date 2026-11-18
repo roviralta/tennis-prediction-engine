@@ -310,3 +310,40 @@ def test_surface_recent_form_preserves_null_for_unknown_surface_or_no_history() 
 
     assert result["player_a_surface_win_rate_last_10"].to_list() == [None, None]
     assert result["player_b_surface_win_rate_last_10"].to_list() == [None, None]
+
+
+def test_bulk_form_preserves_source_order_and_ignores_ineligible_history() -> None:
+    history = pl.DataFrame(
+        {
+            "tourney_date": [20250103, None, 20250102, 20250104, 20250102, 20250101],
+            "winner_id": [2, 2, 1, 2, 2, None],
+            "loser_id": [1, 1, 1, 1, 1, 1],
+            "surface": ["Hard", "Hard", "Hard", "Hard", None, "Hard"],
+        }
+    )
+    matches = pl.DataFrame(
+        {
+            "player_a": [1, 1, None, 1],
+            "player_b": [2, 2, 1, 2],
+            "tourney_date": [20250103, 20250102, 20250103, None],
+            "surface": ["Hard", "Hard", "Hard", "Hard"],
+        }
+    )
+
+    general = add_recent_form_features(matches, history, window=2)
+    surface = add_surface_recent_form_features(matches, history, window=2)
+
+    assert general["player_a_win_rate_last_2"].to_list() == [0.5, 0.0, None, None]
+    assert general["player_b_win_rate_last_2"].to_list() == [1.0, None, 0.5, None]
+    assert surface["player_a_surface_win_rate_last_2"].to_list() == [0.5, 0.0, None, None]
+    assert surface["player_b_surface_win_rate_last_2"].to_list() == [None, None, 0.5, None]
+
+    for add_features, rate_column in (
+        (add_recent_form_features, "player_a_win_rate_last_1"),
+        (add_surface_recent_form_features, "player_a_surface_win_rate_last_1"),
+    ):
+        result = add_features(matches, history, window=1)
+        assert result[rate_column].to_list() == [1.0, 0.0, None, None]
+        empty_result = add_features(matches.head(0), history.head(0), window=1)
+        assert empty_result.height == 0
+        assert empty_result.schema[rate_column] == pl.Float64

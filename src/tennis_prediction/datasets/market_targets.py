@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import polars as pl
@@ -32,6 +32,7 @@ class MarketTargetAudit:
 
     ranges: pl.DataFrame
     consistency: pl.DataFrame
+    violations: pl.DataFrame = field(default_factory=pl.DataFrame)
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,67 @@ def build_market_target_table(matches: pl.DataFrame) -> MarketTargetTable:
     )
 
 
+def _consistency_checks(columns: set[str]) -> list[tuple[str, set[str], pl.Expr]]:
+    checks: list[tuple[str, set[str], pl.Expr]] = []
+
+    def add_check(name: str, inputs: set[str], expression: pl.Expr) -> None:
+        if inputs <= columns:
+            checks.append((name, inputs, expression))
+
+    for side in ("winner", "loser"):
+        svpt = f"{side}_serve_points_played"
+        first_in = f"{side}_first_serves_in"
+        first_won = f"{side}_first_serve_points_won"
+        second_won = f"{side}_second_serve_points_won"
+        ace = f"{side}_aces"
+        df = f"{side}_double_faults"
+        bp_saved = f"{side}_break_points_saved"
+        bp_faced = f"{side}_break_points_faced"
+        add_check(
+            f"{side}_first_serves_exceed_points_played",
+            {svpt, first_in},
+            pl.col(first_in) > pl.col(svpt),
+        )
+        add_check(
+            f"{side}_first_serve_wins_exceed_first_serves_in",
+            {first_in, first_won},
+            pl.col(first_won) > pl.col(first_in),
+        )
+        add_check(
+            f"{side}_second_serve_wins_exceed_second_serve_attempts",
+            {svpt, first_in, second_won},
+            pl.col(second_won) > (pl.col(svpt) - pl.col(first_in)),
+        )
+        add_check(
+            f"{side}_second_serve_wins_and_double_faults_exceed_attempts",
+            {svpt, first_in, second_won, df},
+            pl.col(second_won) + pl.col(df) > pl.col(svpt) - pl.col(first_in),
+        )
+        add_check(f"{side}_aces_exceed_serve_points_played", {svpt, ace}, pl.col(ace) > pl.col(svpt))
+        add_check(
+            f"{side}_double_faults_exceed_serve_points_played",
+            {svpt, df},
+            pl.col(df) > pl.col(svpt),
+        )
+        add_check(
+            f"{side}_break_points_saved_exceed_faced",
+            {bp_saved, bp_faced},
+            pl.col(bp_saved) > pl.col(bp_faced),
+        )
+
+    add_check(
+        "total_games_differs_from_player_games",
+        {"winner_games", "loser_games", "total_games"},
+        pl.col("winner_games") + pl.col("loser_games") != pl.col("total_games"),
+    )
+    add_check(
+        "score_winner_did_not_win_more_sets",
+        {"winner_sets", "loser_sets"},
+        pl.col("winner_sets") <= pl.col("loser_sets"),
+    )
+    return checks
+
+
 def audit_market_targets(table: MarketTargetTable) -> MarketTargetAudit:
     """Report impossible ranges and match-stat relationships without changing data."""
 
@@ -265,60 +327,94 @@ def audit_market_targets(table: MarketTargetTable) -> MarketTargetAudit:
             }
         )
 
-    checks: list[tuple[str, pl.Expr]] = []
-    columns = set(table.targets.columns)
-
-    def add_check(name: str, expression: pl.Expr) -> None:
-        checks.append((name, expression.fill_null(False)))
-
-    for side in ("winner", "loser"):
-        svpt = f"{side}_serve_points_played"
-        first_in = f"{side}_first_serves_in"
-        first_won = f"{side}_first_serve_points_won"
-        second_won = f"{side}_second_serve_points_won"
-        ace = f"{side}_aces"
-        df = f"{side}_double_faults"
-        bp_saved = f"{side}_break_points_saved"
-        bp_faced = f"{side}_break_points_faced"
-        if {svpt, first_in} <= columns:
-            add_check(f"{side}_first_serves_exceed_points_played", pl.col(first_in) > pl.col(svpt))
-        if {first_in, first_won} <= columns:
-            add_check(f"{side}_first_serve_wins_exceed_first_serves_in", pl.col(first_won) > pl.col(first_in))
-        if {svpt, first_in, second_won} <= columns:
-            add_check(
-                f"{side}_second_serve_wins_exceed_second_serve_attempts",
-                pl.col(second_won) > (pl.col(svpt) - pl.col(first_in)),
-            )
-        if {svpt, ace} <= columns:
-            add_check(f"{side}_aces_exceed_serve_points_played", pl.col(ace) > pl.col(svpt))
-        if {svpt, df} <= columns:
-            add_check(f"{side}_double_faults_exceed_serve_points_played", pl.col(df) > pl.col(svpt))
-        if {bp_saved, bp_faced} <= columns:
-            add_check(f"{side}_break_points_saved_exceed_faced", pl.col(bp_saved) > pl.col(bp_faced))
-
-    if {"winner_games", "loser_games", "total_games"} <= columns:
-        add_check(
-            "total_games_differs_from_player_games",
-            pl.col("winner_games") + pl.col("loser_games") != pl.col("total_games"),
+    consistency_rows = []
+    violation_frames = []
+    for name, _, expression in _consistency_checks(set(table.targets.columns)):
+        mask = table.targets.select(expression).to_series()
+        violations = mask.fill_null(False)
+        count = int(violations.sum() or 0)
+        consistency_rows.append(
+            {"check": name, "rows_checked": mask.count(), "violations": count}
         )
-    if {"winner_sets", "loser_sets"} <= columns:
-        add_check("score_winner_did_not_win_more_sets", pl.col("winner_sets") <= pl.col("loser_sets"))
+        if count:
+            violation_frames.append(
+                table.metadata.filter(violations).with_columns(pl.lit(name).alias("check"))
+            )
 
-    consistency_rows = [
-        {
-            "check": name,
-            "rows_checked": table.targets.height,
-            "violations": int(table.targets.select(expression.sum()).item() or 0),
-        }
-        for name, expression in checks
-    ]
+    empty_violations = table.metadata.head(0).with_columns(
+        pl.Series("check", [], dtype=pl.String)
+    )
     return MarketTargetAudit(
         ranges=pl.DataFrame(range_rows),
         consistency=pl.DataFrame(
             consistency_rows,
             schema={"check": pl.String, "rows_checked": pl.UInt32, "violations": pl.UInt32},
         ),
+        violations=pl.concat(violation_frames) if violation_frames else empty_violations,
     )
+
+
+def market_target_eligibility(table: MarketTargetTable) -> pl.DataFrame:
+    """Return one boolean per available market and source match for label selection.
+
+    A paired market requires both players' outcomes. If a consistency check
+    fails, none of its inputs can be trusted in isolation, so markets using any
+    of those inputs are ineligible for that match. An unevaluable check does
+    not invalidate an otherwise observed target. Use these flags only to select
+    post-match labels, never as pre-match features.
+    """
+
+    sides = ("winner", "loser")
+    sets = ("winner_sets", "loser_sets")
+    games = ("winner_games", "loser_games")
+    outcome_columns = {
+        market: tuple(f"{side}_{market}" for side in sides)
+        for market in (*_DIRECT_PLAYER_TARGETS, "break_points_converted", "return_points_won")
+    }
+    outcome_columns.update(
+        {
+            "set_score": ("correct_set_score", *sets),
+            "set_winner": sets,
+            "correct_set_score": ("correct_set_score",),
+            "sets_handicap": sets,
+            "total_games": ("total_games",),
+            "player_games": games,
+            "games_handicap": games,
+            "match_duration": ("match_duration",),
+        }
+    )
+    dependencies = {
+        "correct_set_score": sets,
+        "total_games": games,
+        "return_points_won": tuple(
+            f"{side}_{stat}"
+            for side in sides
+            for stat in ("serve_points_played", "first_serve_points_won", "second_serve_points_won")
+        ),
+        "break_points_converted": tuple(
+            f"{side}_{stat}"
+            for side in sides
+            for stat in ("break_points_faced", "break_points_saved")
+        ),
+    }
+    columns = set(table.targets.columns)
+    checks = _consistency_checks(columns)
+    flags = []
+    for market in table.definitions:
+        outcomes = outcome_columns[market.name]
+        inputs = set(outcomes).union(dependencies.get(market.name, ())) & columns
+        if not set(outcomes) <= columns:
+            flags.append(pl.lit(False).alias(market.name))
+            continue
+        valid = [pl.col(column).is_not_null() for column in outcomes]
+        for column in sorted(inputs):
+            if table.targets.schema[column].is_numeric():
+                bound = pl.col(column) > 0 if column == "match_duration" else pl.col(column) >= 0
+                valid.append(bound.fill_null(False))
+        valid.extend(~violation.fill_null(False) for _, fields, violation in checks if fields & inputs)
+        flags.append(pl.all_horizontal(valid).alias(market.name))
+
+    return table.targets.with_columns(table.metadata["match_index"]).select("match_index", *flags)
 
 
 def _validate_split_date(value: int, name: str) -> None:
