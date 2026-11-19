@@ -131,3 +131,75 @@ To reproduce the fixed comparison on reserved score-market outcomes from 2022 on
 ```bash
 uv run tennis validate-score
 ```
+
+### Player games and game handicap
+
+Train the joint model once with `uv run tennis train-game-pairs`. The default artifact
+is `models/game-pairs.joblib`. Reproduce the frozen holdout with
+`uv run tennis validate-game-pairs`.
+
+```bash
+uv run tennis predict-score \
+  --player-a "Carlos Alcaraz" --player-b "Jannik Sinner" \
+  --date 20261201 --best-of 3 --surface Hard \
+  --player-line 12.5 --handicap -3
+```
+
+Use `--game-pairs` for the default player-game and handicap lines. Repeat
+`--player-line` or `--handicap` for custom integer or half-integer lines.
+A handicap is added to the first requested player's game count. For example,
+`--handicap -3` covers when that player wins by four games or more, pushes
+at exactly three games, and loses below that. Player counts and handicap
+probabilities share a joint distribution. The existing total-games output uses
+its separately validated model.
+
+### Aces, double faults, and breaks
+
+`uv run tennis train-stats` evaluates the fixed models on chronological validation
+and held-out outcomes, prints the metrics as CSV, and saves qualifying market/format
+combinations to `models/statistics.joblib`.
+
+```bash
+uv run tennis predict-score \
+  --player-a "Carlos Alcaraz" --player-b "Jannik Sinner" \
+  --date 20261201 --best-of 3 --surface Hard
+```
+
+With the locally saved models, the command includes player games, handicaps, aces,
+double faults, and breaks by default. For these counts, `2+` means at
+least two, and the display extends through the predicted 95th percentile (with at
+least four thresholds). Repeat `--aces-line`, `--double-faults-line`, or `--breaks-line` to
+replace a market's automatic thresholds with custom lines. Use `--no-stats` or
+`--no-game-pairs` to hide those sections. These statistics are shown per player. Integer lines show the exact-outcome probability as `push`. The forecasts
+apply to completed, labeled matches comparable to the archive. The double-faults
+gain is small, especially at best of three.
+
+## Complete pre-match report
+
+```bash
+uv run tennis forecast \
+  --player-a "Carlos Alcaraz" --player-b "Jannik Sinner" \
+  --date 20261201 --best-of 3 --surface Hard
+```
+
+The report combines the dedicated winner forecast, ATP ranking, recent overall
+and surface form, prior head-to-head meetings, and the latest eligible match and
+ranking dates in the local archive. The remaining sections show the set score,
+total games, player games, handicaps, aces, double faults, and breaks. Each
+player count section chooses its lines automatically. The winner and set-score
+models are fitted separately, so their implied win probabilities can differ.
+
+Use the local artifacts created by `train-winner`, `train-score`,
+`train-game-pairs`, and `train-stats`. The score artifact is required. The report
+identifies unavailable optional models and missing historical data. It does not
+refresh the archive.
+
+## Planned remote data workflow
+
+The current commands use local ATP data. The planned hobby deployment keeps the
+historical archive in a private Neon database and uses TennisMyLife for daily
+match updates. The remote reader, import, and daily schedule are pending.
+
+Keep the existing archive for the migration. The first milestone is to import
+it and compare the same forecast against both data sources before changing
+the CLI default. See [Data sources](DATA_SOURCES.md) for source details.

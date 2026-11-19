@@ -34,7 +34,15 @@ def test_prediction_table_separates_metadata_features_and_target() -> None:
     assert result.metadata["match_index"].to_list() == [7, 7, 8, 8]
 
 
-@pytest.mark.parametrize("feature", ["target", "match_index", "winner_id", "score", "w_ace"])
+@pytest.mark.parametrize(
+    "feature",
+    [
+        "target", "match_index", "winner_id", "score", "w_ace",
+        "player_a_games", "player_b_games", "game_margin",
+        "player_a_aces", "player_b_aces", "player_a_double_faults",
+        "player_b_double_faults", "match_duration", "player_a_breaks", "player_b_breaks",
+    ],
+)
 def test_prediction_table_rejects_target_metadata_and_post_match_features(
     feature: str,
 ) -> None:
